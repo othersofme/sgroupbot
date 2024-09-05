@@ -77,6 +77,7 @@ type Message struct {
 		MemberOpenID string `json:"member_openid"`
 		UserOpenID   string `json:"user_openid"`
 		Bot          bool   `json:"bot"`
+		Username     string `json:"username"`
 	} `json:"author"`
 	ID        string `json:"id"`
 	Timestamp string `json:"timestamp"`
