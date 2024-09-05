@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 )
@@ -17,13 +18,17 @@ const (
 
 	GatewayAPI = "/gateway"
 
-	CreateChannelAPI = "/guilds/%s/channels"
+	CreateChannelAPI = "/guilds/%s/channels" // channelId
 
 	GetGuildListAPI = "/users/@me/guilds"
 
 	CreateGroupMessageAPI = "/v2/groups/%s/messages" // group_openid
 
 	CreateUserMessageAPI = "/v2/users/%s/messages" // openid
+
+	CreateDirectMessageAPI = "/dms/%s/messages" // guild_id
+
+	CreateChannelMessageAPI = "/channels/%s/messages" // channel_id
 
 )
 
@@ -122,59 +127,50 @@ func (a *API) newRequest(method, api string, body io.Reader) (*http.Request, err
 		return nil, err
 	}
 	req.Header.Set("Authorization", BotToken(a.Ticket))
+	if method != http.MethodGet {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	return req, nil
 }
 
-func (a *API) newRequestWithObject(method, api string, obj interface{}) (*http.Request, error) {
+func (a *API) doSimpleRequest(method, api string, request, response interface{}) error {
+
 	var body io.Reader
-	if obj != nil {
-		data, err := json.Marshal(obj)
+	var reqData []byte
+	if request != nil {
+		data, err := json.Marshal(request)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		fmt.Println("newRequestWithObject", api, string(data))
+		reqData = data
 		body = bytes.NewReader(data)
 	}
 
-	return a.newRequest(method, api, body)
-}
+	req, err := a.newRequest(method, api, body)
+	if err != nil {
+		return err
+	}
+	log.Println("doSimpleRequest.Request", api, string(reqData))
 
-func (a *API) doRequest(req *http.Request, result interface{}) error {
 	cli := a.Client
 	if cli == nil {
 		cli = http.DefaultClient
 	}
-
 	resp, err := cli.Do(req)
 	if err != nil {
+		log.Println("doSimpleRequet.Response", api, err)
 		return err
 	}
 
 	var b = make([]byte, 0, resp.ContentLength)
-
 	b, err = ReadAll(b, resp.Body)
 	if err != nil {
 		return fmt.Errorf("readAll: %w", err)
 	}
+	log.Println("doSimpleRequet.Response", api, resp.StatusCode, string(b))
 
-	fmt.Println("doRequest", resp.StatusCode, string(b))
-
-	if err := json.Unmarshal(b, result); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (a *API) doSimpleRequest(method, api string, request, response interface{}) error {
-
-	req, err := a.newRequestWithObject(method, api, request)
-	if err != nil {
-		return err
-	}
-
-	if err := a.doRequest(req, response); err != nil {
+	if err := json.Unmarshal(b, response); err != nil {
 		return err
 	}
 
@@ -259,7 +255,7 @@ const (
 	MsgTypeEmbed    = 4
 )
 
-type GroupMessageRequest struct {
+type CreateMessageRequest struct {
 	Content string `json:"content"`
 	MsgType int    `json:"msg_type"`
 	MsgID   string `json:"msg_id"`
@@ -267,17 +263,18 @@ type GroupMessageRequest struct {
 	MsgSeq  int    `json:"msg_seq,omitempty"`
 }
 
-type GroupMessageResposne struct {
-	ID        string `json:"id"`
-	Timestamp int64  `json:"timestamp"`
-	Code      int    `json:"code"`
-	Message   string `json:"message"`
+type CreateMessageResposne struct {
+	ID        string          `json:"id"`
+	Timestamp string          `json:"timestamp"`
+	Code      int             `json:"code"`
+	Message   string          `json:"message"`
+	Data      json.RawMessage `json:"data"`
 }
 
-func (a *API) CreateGroupMessage(groupOpenID string, msg GroupMessageRequest) error {
+func (a *API) CreateGroupMessage(groupOpenID string, msg CreateMessageRequest) error {
 	method := http.MethodPost
 	api := fmt.Sprintf(CreateGroupMessageAPI, groupOpenID)
-	var result GroupMessageResposne
+	var result CreateMessageResposne
 	if err := a.doSimpleRequest(method, api, &msg, &result); err != nil {
 		return err
 	}
@@ -288,14 +285,68 @@ func (a *API) CreateGroupMessage(groupOpenID string, msg GroupMessageRequest) er
 	return nil
 }
 
-func (a *API) CreateUserMessage(groupOpenID string, msg GroupMessageRequest) error {
+func (a *API) CreateUserMessage(groupOpenID string, msg CreateMessageRequest) error {
 	method := http.MethodPost
 	api := fmt.Sprintf(CreateUserMessageAPI, groupOpenID)
-	var result GroupMessageResposne
+	var result CreateMessageResposne
 	if err := a.doSimpleRequest(method, api, &msg, &result); err != nil {
 		return err
 	}
 	if result.Code != 0 {
+		return fmt.Errorf("code: %d, msg: %s", result.Code, result.Message)
+	}
+
+	return nil
+}
+
+func (a *API) CreateDirectMessage(guildID string, msg CreateMessageRequest) error {
+	method := http.MethodPost
+	api := fmt.Sprintf(CreateDirectMessageAPI, guildID)
+	var result CreateMessageResposne
+	if err := a.doSimpleRequest(method, api, &msg, &result); err != nil {
+		return err
+	}
+	if result.Code != 0 {
+		if result.Code == 304023 && len(result.Data) > 0 {
+			var audit struct {
+				MessageAudit MessageAuditError `json:"message_audit"`
+			}
+
+			if err := json.Unmarshal(result.Data, &audit); err == nil && audit.MessageAudit.AuditID != "" {
+				return &MessageAuditError{audit.MessageAudit.AuditID}
+			}
+		}
+		return fmt.Errorf("code: %d, msg: %s", result.Code, result.Message)
+	}
+
+	return nil
+}
+
+type MessageAuditError struct {
+	AuditID string `json:"audit_id"`
+}
+
+func (e *MessageAuditError) Error() string {
+	return "code: 304023, msg: push message is waiting for audit now"
+}
+
+func (a *API) CreateChannelMessage(channelID string, msg CreateMessageRequest) error {
+	method := http.MethodPost
+	api := fmt.Sprintf(CreateChannelMessageAPI, channelID)
+	var result CreateMessageResposne
+	if err := a.doSimpleRequest(method, api, &msg, &result); err != nil {
+		return err
+	}
+	if result.Code != 0 {
+		if result.Code == 304023 && len(result.Data) > 0 {
+			var audit struct {
+				MessageAudit MessageAuditError `json:"message_audit"`
+			}
+
+			if err := json.Unmarshal(result.Data, &audit); err == nil && audit.MessageAudit.AuditID != "" {
+				return &MessageAuditError{audit.MessageAudit.AuditID}
+			}
+		}
 		return fmt.Errorf("code: %d, msg: %s", result.Code, result.Message)
 	}
 

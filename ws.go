@@ -3,7 +3,7 @@ package sgroupbot
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log"
 	"sync/atomic"
 	"time"
 
@@ -71,17 +71,23 @@ const (
 //	    "id": "ROBOT1.0_FKati8czlWPoNcL7gK9wc.RS6sD5FukvrWRVXHhnwFcp5f71hM9ano1bK01zCwX36lZAu5CzMPWbxt85RoWg58tG81ovPjw88HwjHppK6Gc!",
 //	    "timestamp": "12024-09-04T13:12:43+08:00"
 //	}
-type GroupMessage struct {
+type Message struct {
 	Author struct {
 		ID           string `json:"id"`
 		MemberOpenID string `json:"member_openid"`
 		UserOpenID   string `json:"user_openid"`
+		Bot          bool   `json:"bot"`
 	} `json:"author"`
-	Content     string `json:"content"`
+	ID        string `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Content   string `json:"content"`
+
+	// 频道字段
+	ChannelID string `json:"channel_id"`
+	GuildID   string `json:"guild_id"`
+	// 群聊字段
 	GroupID     string `json:"group_id"`
 	GroupOpenID string `json:"group_openid"`
-	ID          string `json:"id"`
-	Timestamp   string `json:"timestamp"`
 }
 
 const (
@@ -257,7 +263,7 @@ func (a *API) runSession(ctx context.Context, gateway string, shardIndex, shardT
 			return err
 		}
 
-		fmt.Println("received", string(data))
+		log.Println("ws_message", string(data))
 		var msg WsMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return err
@@ -280,19 +286,21 @@ func (a *API) runSession(ctx context.Context, gateway string, shardIndex, shardT
 
 func (a *API) heartBeat(ctx context.Context, session *Session) error {
 	var heartBeat HeartbeatMessage
+	heartBeat.Op = OpHeartbeat
 	var ws = session.Conn
 	if err := ws.WriteJSON(&heartBeat); err != nil {
 		return err
 	}
-	t := time.NewTicker(500 * time.Millisecond)
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			//
+			return nil
 		case <-t.C:
 			heartBeat.Seq = atomic.LoadUint32(&session.Seq)
+			log.Println("heartbeat", &heartBeat)
 			if err := ws.WriteJSON(&heartBeat); err != nil {
-				fmt.Println("heartbeat", err)
 				return err
 			}
 		}
@@ -300,7 +308,6 @@ func (a *API) heartBeat(ctx context.Context, session *Session) error {
 }
 
 func (a *API) dispatch(msg WsMessage) {
-	fmt.Println(len(a.Handlers), msg.Op, msg.Seq, msg.Type, string(msg.Data))
 	if len(a.Handlers) == 0 {
 		return
 	}
