@@ -103,7 +103,9 @@ type API struct {
 
 	Ticket Ticket
 
-	Intents  int
+	Intents int
+
+	BotID    string
 	Handlers map[string]EventHandler
 }
 

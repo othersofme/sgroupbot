@@ -60,6 +60,10 @@ func (s *ApiServer) handleMessage(msg Message) {
 		to = msg.ChannelID
 		userID = msg.Author.Username
 		sendMsg = s.api.CreateChannelMessage
+		atPrefix := fmt.Sprintf("<@!%s>", s.api.BotID)
+		if strings.HasPrefix(msg.Content, atPrefix) {
+			msg.Content = msg.Content[len(atPrefix)+1:]
+		}
 	case sgroupbot.EventDirectMessageCreate: // 频道私聊
 		to = msg.GuildID
 		userID = msg.Author.Username

@@ -24,6 +24,7 @@ const (
 
 // 事件类型
 const (
+	EventReady                        = "READY"
 	EventGuildCreate           string = "GUILD_CREATE"
 	EventGuildUpdate           string = "GUILD_UPDATE"
 	EventGuildDelete           string = "GUILD_DELETE"
@@ -199,6 +200,18 @@ type IdentifyMessage struct {
 	Data IdentifyData `json:"d"`
 }
 
+type ReadyMessage struct {
+	Version   int    `json:"version"`
+	SessionID string `json:"session_id"`
+	User      struct {
+		ID       string `json:"id"`
+		Username string `json:"username"`
+		Bot      bool   `json:"bot"`
+		Status   int    `json:"status"`
+	} `json:"user"`
+	Shard []int `json:"shard"`
+}
+
 func (a *API) StartWs(ctx context.Context) error {
 	gw, err := a.Gateway()
 	if err != nil {
@@ -310,6 +323,15 @@ func (a *API) heartBeat(ctx context.Context, session *Session) error {
 
 func (a *API) dispatch(msg WsMessage) {
 	if len(a.Handlers) == 0 {
+		return
+	}
+
+	if msg.Type == EventReady {
+		var ready ReadyMessage
+		if err := json.Unmarshal(msg.Data, &ready); err != nil {
+			return
+		}
+		a.BotID = ready.User.ID
 		return
 	}
 
